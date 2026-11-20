@@ -22,7 +22,7 @@ button:disabled{opacity:.4}
 .filebtn input{display:none}
 .stage{position:relative;width:100%;background:#000;border-radius:12px;overflow:hidden;min-height:200px;touch-action:manipulation}
 .stage video,.stage canvas{display:block;width:100%;height:auto}
-#overlay{position:absolute;inset:0;width:100%;height:100%}
+#overlay{position:absolute;left:0;top:0;width:100%;height:auto}
 #video{position:absolute;inset:0;opacity:0}
 .status{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin:10px 0;font-size:14px}
 .pill{background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:5px 12px}
@@ -66,7 +66,7 @@ input[type=range]{width:100%;accent-color:var(--gold)}
     <summary>Tuning</summary>
     <div class="ctl"><span>Tile brightness</span><input type="range" id="tBright" min="-60" max="60" value="0"><span id="vBright">auto</span></div>
     <div class="ctl"><span>Max tile color (saturation)</span><input type="range" id="tSat" min="20" max="140" value="70"><span id="vSat">70</span></div>
-    <div class="ctl"><span>Match strictness</span><input type="range" id="tMatch" min="70" max="98" value="88"><span id="vMatch">0.88</span></div>
+    <div class="ctl"><span>Match strictness</span><input type="range" id="tMatch" min="70" max="98" value="82"><span id="vMatch">0.82</span></div>
     <div class="ctl"><span>Tray game (optional)</span><span><button id="trayBtn">▭ Mark tray</button> <button id="trayClear">No tray</button></span><span></span></div>
     <div class="ctl"><span>Undos left</span><span class="undo"><button id="uMinus">−</button><b id="uVal">3</b><button id="uPlus">+</button></span><span></span></div>
     <div class="ctl"><span>Show detection mask</span><input type="checkbox" id="tMask"><span></span></div>
@@ -79,7 +79,7 @@ const $=id=>document.getElementById(id);
 const view=$('view'),ov=$('overlay'),vctx=view.getContext('2d',{willReadFrequently:true}),octx=ov.getContext('2d');
 const video=$('video');
 let mode=null,frozen=false,stream=null,last=null,selected=-1,busy=false;
-const P={bright:0,sat:70,match:0.88,mask:false};
+const P={bright:0,sat:70,match:0.82,mask:false};
 let TRAY=null;try{TRAY=JSON.parse(localStorage.getItem('mj-tray')||'null');}catch(e){}
 let UNDOS=3,marking=false,dragA=null;
 let SAMPLE=null,CL=null,aiBusy=false;
@@ -119,11 +119,11 @@ function analyze(img,W,H,hd){
   const trayCand=TR?comps.filter(c=>c.area>minA*0.4&&inTray(c)).map(c=>({...c,w:c.x1-c.x0,h:c.y1-c.y0,fill:c.area/((c.x1-c.x0)*(c.y1-c.y0))})):[];
   const boardCand=cand.filter(c=>!inTray(c));
   const singles=boardCand.filter(c=>c.fill>0.7&&c.h/c.w>1.05&&c.h/c.w<1.9);
-  if(singles.length<4)return{tiles:[],groups:[],thr,mask,reason:'No tile faces found. Try the brightness slider.'};
+  if(singles.length<4){const g0=(()=>{try{return growTiles(lum,sat,W,H,thr,TR);}catch(e){return null;}})();if(!g0||g0.tiles.length<4)return{tiles:[],groups:[],thr,mask,reason:'No tiles found yet. Fill the screen with the board and hold steady.'};singles.push(...g0.tiles.map(t=>({w:t.w,h:t.h,fill:1})));}
   const med=a=>{const s=[...a].sort((x,y)=>x-y);return s[s.length>>1];};
   // use the larger half (fully visible faces are the biggest)
   const ws=singles.map(c=>c.w).sort((a,b)=>a-b),hs=singles.map(c=>c.h).sort((a,b)=>a-b);
-  const tw=med(ws.slice(Math.floor(ws.length*0.3))),th=med(hs.slice(Math.floor(hs.length*0.3)));
+  let tw=med(ws.slice(Math.floor(ws.length*0.3))),th=med(hs.slice(Math.floor(hs.length*0.3)));let tw0=tw,th0=th;
   const tiles=[];
   for(const c of boardCand){
     const nx=Math.round(c.w/tw),ny=Math.round(c.h/th);
@@ -133,6 +133,9 @@ function analyze(img,W,H,hd){
     if(nx*ny>12)continue;
     for(let a=0;a<nx;a++)for(let b=0;b<ny;b++){const x=c.x0+a*c.w/nx,y=c.y0+b*c.h/ny;tiles.push({x,y,w:c.w/nx,h:c.h/ny});}
   }
+  // second detector for games whose tiles touch (white faces separated only by faint lines):
+  // seed from clean tiles, then grow tile-by-tile using the known tile size and boundary lines
+  try{const g=growTiles(lum,sat,W,H,thr,TR);if(g&&g.tiles.length>tiles.length*1.15){tiles.length=0;for(const t of g.tiles)tiles.push(t);tw0=g.tw;th0=g.th;}}catch(e){console.log('grow',e);}
   const nBoard=tiles.length;
   // tray tiles: their own size (slots are often drawn smaller); split blobs that hold several touching tiles
   if(trayCand.length){const tc=trayCand.filter(c=>c.fill>0.55&&c.h/c.w>0.5);const th2=tc.length?Math.max(...tc.map(c=>c.h)):0;
@@ -144,7 +147,13 @@ function analyze(img,W,H,hd){
   for(const t of tiles){
     // sample a slightly larger grid so we can try +/-1 cell shifts
     const iw0=t.w*hsc*0.68,ih0=t.h*hsc*0.72,cw=iw0/FX,chh=ih0/FY;
-    const ix=t.x*hsc+t.w*hsc*0.16-cw,iy=t.y*hsc+t.h*hsc*0.14-chh;
+    // centre the comparison window on the symbol itself (ink centroid), not on the detected box
+    let cxs=0,cys=0,cwt=0;{const bx=t.x*hsc,by=t.y*hsc,bw=t.w*hsc,bh=t.h*hsc;let fl=0,fn=0;const pts=[];
+      for(let gy=0;gy<28;gy++)for(let gx=0;gx<22;gx++){const px=Math.min(HW-1,(bx+bw*(0.16+0.68*(gx+0.5)/22))|0),py=Math.min(HH-1,(by+bh*(0.13+0.74*(gy+0.5)/28))|0);const j=(py*HW+px)*4;const r=hdD[j],g=hdD[j+1],b=hdD[j+2];const l=0.299*r+0.587*g+0.114*b;const sa=Math.max(r,g,b)-Math.min(r,g,b);pts.push([px,py,l,sa]);if(l>thr&&sa<P.sat){fl+=l;fn++;}}
+      fl=fn?fl/fn:230;for(const [px,py,l,sa] of pts){const mx_=Math.min(W-1,(px/hsc)|0),my_=Math.min(H-1,(py/hsc)|0);if(!mask[my_*W+mx_])continue;const ink=Math.max(0,(fl-l)/fl)+(sa>60?sa/300:0);if(ink>0.32){cxs+=px*ink;cys+=py*ink;cwt+=ink;}}}
+    let ccx=t.x*hsc+t.w*hsc*0.5,ccy=t.y*hsc+t.h*hsc*0.5;
+    if(cwt>3){const mx=cxs/cwt,my=cys/cwt;ccx=Math.max(ccx-t.w*hsc*0.18,Math.min(ccx+t.w*hsc*0.18,mx));ccy=Math.max(ccy-t.h*hsc*0.18,Math.min(ccy+t.h*hsc*0.18,my));}
+    const ix=ccx-iw0/2-cw,iy=ccy-ih0/2-chh;
     let fr=0,fg=0,fb=0,fn=0;const raw=new Float32Array(GX*GY*3);
     for(let gy=0;gy<GY;gy++)for(let gx=0;gx<GX;gx++){
       let r=0,g=0,b=0,n=0;const sx0=ix+gx*cw,sy0=iy+gy*chh;
@@ -192,7 +201,43 @@ function analyze(img,W,H,hd){
   groups.forEach((g,k)=>g.forEach(i=>{tiles[i].g=k;}));
   // link each tray tile to its best-matching board tile
   for(let k=nBoard;k<tiles.length;k++){let best=-2,bj=-1;for(let j=0;j<nBoard;j++){const s=sim(tiles[k],tiles[j]);if(s>best){best=s;bj=j;}}tiles[k].link=best>P.match-0.03?bj:-1;tiles[k].linkSim=best;}
-  return{tiles,groups,thr,mask,tw,th,nBoard,TR};
+  return{tiles,groups,thr,mask,tw:tw0,th:th0,nBoard,TR};
+}
+function boxMax(a,W,H,r){const t=new Float32Array(a.length),o=new Float32Array(a.length);
+  for(let y=0;y<H;y++){const row=y*W;for(let x=0;x<W;x++){let m=-1e9;for(let k=-r;k<=r;k++){const xx=x+k;if(xx<0||xx>=W)continue;const v=a[row+xx];if(v>m)m=v;}t[row+x]=m;}}
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){let m=-1e9;for(let k=-r;k<=r;k++){const yy=y+k;if(yy<0||yy>=H)continue;const v=t[yy*W+x];if(v>m)m=v;}o[y*W+x]=m;}return o;}
+function integ(a,W,H){const I=new Float64Array((W+1)*(H+1));for(let y=0;y<H;y++){let rs=0;for(let x=0;x<W;x++){rs+=a[y*W+x];I[(y+1)*(W+1)+x+1]=I[y*(W+1)+x+1]+rs;}}return I;}
+function growTiles(lum,sat,W,H,thr,TR){
+  const N=W*H,ft=Math.min(thr-15,170),face=new Uint8Array(N);for(let i=0;i<N;i++)face[i]=(lum[i]>ft&&sat[i]<P.sat)?1:0;
+  const faceF=fillHoles(face,W,H);
+  // seeds: cut the face mask along locally-dark lines
+  const mx=boxMax(lum,W,H,3);let m=new Uint8Array(N);for(let i=0;i<N;i++)m[i]=(face[i]&&mx[i]-lum[i]<=8)?1:0;
+  m=morph(m,W,H,1,false);m=fillHoles(m,W,H);
+  const lab=new Int32Array(N).fill(-1),st=new Int32Array(N);const seeds=[];
+  for(let i=0;i<N;i++){if(!m[i]||lab[i]>=0)continue;let sp=0;st[sp++]=i;lab[i]=1;let x0=W,y0=H,x1=0,y1=0,ar=0;
+    while(sp){const k=st[--sp];const x=k%W,y=(k/W)|0;ar++;if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;
+      if(x>0&&m[k-1]&&lab[k-1]<0){lab[k-1]=1;st[sp++]=k-1;}if(x<W-1&&m[k+1]&&lab[k+1]<0){lab[k+1]=1;st[sp++]=k+1;}if(y>0&&m[k-W]&&lab[k-W]<0){lab[k-W]=1;st[sp++]=k-W;}if(y<H-1&&m[k+W]&&lab[k+W]<0){lab[k+W]=1;st[sp++]=k+W;}}
+    const w=x1-x0+1,h=y1-y0+1,fill=ar/(w*h),asp=h/w;if(ar>N*0.0015&&fill>0.7&&asp>1.05&&asp<1.8&&w>18)seeds.push({x:x0,y:y0,w,h});}
+  if(seeds.length<3)return null;
+  const med=a=>{const s=[...a].sort((p,q)=>p-q);return s[s.length>>1];};
+  const tw=Math.round(med(seeds.map(s=>s.w))),th=Math.round(med(seeds.map(s=>s.h)));
+  // boundary evidence: thin valleys (darker than both sides) or non-face pixels
+  const bl=new Float32Array(N);for(let y=1;y<H-1;y++)for(let x=1;x<W-1;x++){const i=y*W+x;bl[i]=(lum[i]*4+lum[i-1]+lum[i+1]+lum[i-W]+lum[i+W])/8;}
+  const EV=new Float32Array(N),EH=new Float32Array(N);
+  for(let y=3;y<H-3;y++)for(let x=3;x<W-3;x++){const i=y*W+x;const nf=faceF[i]?0:1;EV[i]=Math.max(nf,(Math.min(bl[i-3],bl[i+3])-bl[i])>2?1:0);EH[i]=Math.max(nf,(Math.min(bl[i-3*W],bl[i+3*W])-bl[i])>2?1:0);}
+  const FF=new Float32Array(N);for(let i=0;i<N;i++)FF[i]=faceF[i];
+  const IF=integ(FF,W,H),IV=integ(EV,W,H),IH=integ(EH,W,H),W1=W+1;
+  const rs=(I,x0,y0,x1,y1)=>{x0=Math.max(0,x0);y0=Math.max(0,y0);x1=Math.min(W,x1);y1=Math.min(H,y1);if(x1<=x0||y1<=y0)return 0;return I[y1*W1+x1]-I[y0*W1+x1]-I[y1*W1+x0]+I[y0*W1+x0];};
+  const ins=Math.max(3,Math.round(tw*0.12)),bt=2,iw=tw-2*ins,ih=th-2*ins;
+  const score=(x,y)=>{if(x<2||y<2||x+tw>W-2||y+th>H-2)return null;const inner=rs(IF,x+ins,y+ins,x+tw-ins,y+th-ins)/(iw*ih);if(inner<0.85)return null;
+    const L=rs(IV,x-bt,y+ins,x+bt,y+th-ins)/(2*bt*ih),R=rs(IV,x+tw-bt,y+ins,x+tw+bt,y+th-ins)/(2*bt*ih),T=rs(IH,x+ins,y-bt,x+tw-ins,y+bt)/(2*bt*iw),B=rs(IH,x+ins,y+th-bt,x+tw-ins,y+th+bt)/(2*bt*iw);return{lr:(L+R)/2,tb:(T+B)/2};};
+  const refine=(x,y,r)=>{let best=null;for(let dy=-r;dy<=r;dy++)for(let dx=-r;dx<=r;dx++){const s=score(x+dx,y+dy);if(!s)continue;const sc=s.lr*1.5+s.tb;if(!best||sc>best.sc)best={sc,x:x+dx,y:y+dy,lr:s.lr,tb:s.tb};}return best;};
+  const out=[];const inTR=(x,y)=>TR&&x+tw/2>TR.x0&&x+tw/2<TR.x1&&y+th/2>TR.y0&&y+th/2<TR.y1;
+  const overl=(x,y)=>out.some(t=>{const ox=Math.max(0,Math.min(x+tw,t.x+tw)-Math.max(x,t.x)),oy=Math.max(0,Math.min(y+th,t.y+th)-Math.max(y,t.y));return ox*oy>0.3*tw*th;});
+  const q=[];
+  for(const sd of seeds){const b=refine(Math.round(sd.x+sd.w/2-tw/2),Math.round(sd.y+sd.h/2-th/2),3);if(b&&!overl(b.x,b.y)&&!inTR(b.x,b.y)){out.push({x:b.x,y:b.y,w:tw,h:th});q.push(b);}}
+  while(q.length&&out.length<200){const c=q.shift();for(const [dx,dy] of [[tw,0],[-tw,0],[0,th],[0,-th]]){const b=refine(c.x+dx,c.y+dy,6);if(!b||b.lr<0.35||b.tb<0.15||overl(b.x,b.y)||inTR(b.x,b.y))continue;out.push({x:b.x,y:b.y,w:tw,h:th});q.push(b);}}
+  return{tiles:out,tw,th};
 }
 function fillHoles(m,W,H){ // background pixels not connected to the image border are holes inside a tile face
   const N=W*H,seen=new Uint8Array(N),st=new Int32Array(N);let sp=0;
