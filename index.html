@@ -46,6 +46,7 @@ input[type=range]{width:100%;accent-color:var(--gold)}
 <div class="wrap">
   <header><h1>Mahjong Solitaire <span>Matcher</span></h1><div class="sub">Point a camera at the game, or load a screenshot. Matching pairs light up.</div></header>
   <div class="bar">
+    <button id="aiBtn" class="on" style="display:none">✨ Solve (snap the board)</button><input type="file" id="snapIn" accept="image/*" capture="environment" style="display:none">
     <button id="camBtn">📷 Live camera</button>
     <button id="freezeBtn" disabled>⏸ Freeze</button>
     <label class="filebtn">🖼 Screenshot / photo<input type="file" id="fileIn" accept="image/*"></label>
@@ -81,6 +82,7 @@ let mode=null,frozen=false,stream=null,last=null,selected=-1,busy=false;
 const P={bright:0,sat:70,match:0.88,mask:false};
 let TRAY=null;try{TRAY=JSON.parse(localStorage.getItem('mj-tray')||'null');}catch(e){}
 let UNDOS=3,marking=false,dragA=null;
+let SAMPLE=null,CL=null,aiBusy=false;
 const PAL=['#f0b94a','#ff6f61','#7bd389','#58c4dd','#c792ea','#ffd166','#ef476f','#06d6a0','#118ab2','#f78c6b','#a0c4ff','#caffbf','#ffadad','#bdb2ff','#fdffb6','#9bf6ff'];
 
 /* ---------------- vision ---------------- */
@@ -285,7 +287,7 @@ function draw(res,W,H,animOnly){
    `<span class="pill"><b>${nB}</b> top tiles seen</span><span class="pill"><b>${freePairs}</b> playable pair${freePairs===1?'':'s'}</span><span class="pill"><b>${nG}</b> matching group${nG===1?'':'s'}</span>`;
 }
 // smooth pulsing between camera frames
-(function anim(){requestAnimationFrame(anim);if(last&&last.res&&!last.res.reason&&!marking&&!dragA&&(!SHOWALL||selected>=0||true))draw(last.res,last.W,last.H,true);})();
+(function anim(){requestAnimationFrame(anim);if(CL&&mode==='img'){drawAI();return;}if(last&&last.res&&!last.res.reason&&!marking&&!dragA&&(!SHOWALL||selected>=0||true))draw(last.res,last.W,last.H,true);})();
 
 /* ---------------- sources ---------------- */
 const MAXW=720,HDW=1500;const hdc=document.createElement('canvas'),hctx=hdc.getContext('2d',{willReadFrequently:true});let lastHD=null;
@@ -298,7 +300,7 @@ async function startCam(){
   if(stream){stopCam();return;}
   try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}},audio:false});}
   catch(e){$('status').innerHTML=`<span class="pill">Camera unavailable here (${e.name||e.message}). If you're viewing this inside the chat, open the downloaded file directly in Chrome or Safari, or use a screenshot instead.</span>`;return;}
-  if(TRAY&&TRAY.demo)TRAY=null;
+  if(TRAY&&TRAY.demo)TRAY=null;CL=null;
   video.srcObject=stream;await video.play();mode='cam';frozen=false;$('hint').style.display='none';$('camBtn').classList.add('on');$('camBtn').textContent='■ Stop camera';$('freezeBtn').disabled=false;$('freezeBtn').textContent='⏸ Freeze';
   loop();
 }
@@ -308,8 +310,8 @@ let procMs=250;
 function loop(){if(mode!=='cam')return;requestAnimationFrame(loop);if(frozen)return;const now=performance.now();if(now-lastT<Math.max(250,procMs*1.6))return;lastT=now;if(video.videoWidth){const t0=performance.now();process(video,video.videoWidth,video.videoHeight);procMs=procMs*0.7+(performance.now()-t0)*0.3;}}
 $('camBtn').onclick=startCam;
 $('freezeBtn').onclick=()=>{frozen=!frozen;$('freezeBtn').textContent=frozen?'▶ Resume':'⏸ Freeze';$('freezeBtn').classList.toggle('on',frozen);};
-$('fileIn').onchange=e=>{const f=e.target.files[0];if(!f)return;stopCam();if(TRAY&&TRAY.demo)TRAY=null;const im=new Image();im.onload=()=>{mode='img';$('hint').style.display='none';selected=-1;process(im,im.naturalWidth,im.naturalHeight);};im.src=URL.createObjectURL(f);};
-$('demoBtn').onclick=()=>{stopCam();const c=makeDemo();if(!TRAY||TRAY.demo){TRAY={...window.__demoTrayRect,demo:true};}mode='img';$('hint').style.display='none';selected=-1;process(c,c.width,c.height);};
+$('fileIn').onchange=e=>{const f=e.target.files[0];if(!f)return;stopCam();CL=null;if(TRAY&&TRAY.demo)TRAY=null;const im=new Image();im.onload=()=>{mode='img';$('hint').style.display='none';selected=-1;process(im,im.naturalWidth,im.naturalHeight);};im.src=URL.createObjectURL(f);};
+$('demoBtn').onclick=()=>{stopCam();CL=null;const c=makeDemo();if(!TRAY||TRAY.demo){TRAY={...window.__demoTrayRect,demo:true};}mode='img';$('hint').style.display='none';selected=-1;process(c,c.width,c.height);};
 const frac=e=>{const r=ov.getBoundingClientRect();return{x:(e.clientX-r.left)/r.width,y:(e.clientY-r.top)/r.height};};
 $('trayBtn').onclick=()=>{if(!last){$('status').innerHTML='<span class="pill">Load a screenshot or start the camera first.</span>';return;}marking=!marking;$('trayBtn').classList.toggle('on',marking);$('trayBtn').textContent=marking?'Drag over the 4 slots…':'▭ Mark tray';if(marking&&mode==='cam'&&!frozen)$('freezeBtn').click();};
 ov.addEventListener('pointerdown',e=>{if(!marking)return;dragA=frac(e);e.preventDefault();});
@@ -329,6 +331,45 @@ bind('tBright','bright',v=>v===0?'auto':(v>0?'+':'')+v);bind('tSat','sat',v=>v);
 
 // start the camera straight away when the page opens (falls back to the buttons if the browser says no)
 window.addEventListener('load',()=>{if(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia&&!/claude\.ai|claudeusercontent/.test(location.host))setTimeout(()=>{if(!stream&&!last)startCam();},300);});
+/* ---------------- Claude-powered solving (works where the page can ask Claude) ---------------- */
+(async()=>{try{if(window.claude&&claude.use){SAMPLE=await claude.use('sample');}}catch(e){SAMPLE=null;}
+  if(SAMPLE){$('aiBtn').style.display='';$('hint').innerHTML='Tap <b>✨ Solve</b>, take a photo of the whole board, and the next pair to take will light up. Repeat after each move.';}})();
+const AI_PROMPT=`This image shows a Mahjong solitaire game, usually photographed off another screen, possibly at an angle.
+Rules: a tile is FREE only if no other tile lies on top of it (not even partly) AND at least one of its left or right sides is open (no tile directly touching it at the same height on that side). Two identical free tiles can be removed together. Any two Season tiles match each other; any two Flower tiles match each other.
+Some games also have a holding tray of slots (often 4) below or above the board. If there is one, list the tiles in it, and prefer a FREE board tile that matches a tray tile (put the board tile in "a" and the tray tile in "b").
+Task: find pairs where BOTH tiles are free right now. Look carefully at each tile's symbol; only pair tiles you are confident are identical. Order pairs best first: prefer pairs that unblock other tiles, and tiles at the ends of long rows or on top of stacks.
+Return ONLY JSON, no other text:
+{"pairs":[{"tile":"short name, e.g. Red dragon 中","a":[x0,y0,x1,y1],"b":[x0,y0,x1,y1],"where":"plain-language location of both tiles","sure":0.0}],"tray":["names of tiles in the tray, if any"],"note":"one short sentence if something is unclear"}
+Coordinates: integers 0-1000 as fractions of the image width (x) and height (y); each box tight around one tile's face. Give at most 6 pairs. If no free pair is visible, return {"pairs":[],"note":"why"}.`;
+function toBlob(img,maxSide=1568){const s=Math.min(1,maxSide/Math.max(img.naturalWidth||img.width,img.naturalHeight||img.height));const c=document.createElement('canvas');c.width=Math.round((img.naturalWidth||img.width)*s);c.height=Math.round((img.naturalHeight||img.height)*s);c.getContext('2d').drawImage(img,0,0,c.width,c.height);return new Promise(r=>c.toBlob(r,'image/jpeg',0.88));}
+function parseJSON(t){if(t&&typeof t==='object')return t;const m=String(t||'').match(/\{[\s\S]*\}/);return m?JSON.parse(m[0]):null;}
+async function aiSolve(img){
+  if(!SAMPLE||aiBusy)return;aiBusy=true;stopCam();CL=null;selected=-1;
+  mode='img';$('hint').style.display='none';
+  const s=Math.min(1,MAXW/img.naturalWidth);last={res:{tiles:[],groups:[],reason:null},W:Math.round(img.naturalWidth*s),H:Math.round(img.naturalHeight*s)};
+  view.width=last.W;view.height=last.H;vctx.drawImage(img,0,0,last.W,last.H);ov.width=last.W;ov.height=last.H;octx.clearRect(0,0,last.W,last.H);
+  const el=$('plan');el.style.display='';el.className='plan';el.innerHTML='<div class="big">Reading the board…</div><small>This usually takes a few seconds.</small>';$('status').innerHTML='';
+  try{const blob=await toBlob(img);const out=await SAMPLE(AI_PROMPT,{images:[blob],modelTier:'complex'});const j=parseJSON(out.text);
+    if(!j)throw{message:'Could not read the answer. Try again.'};
+    CL={pairs:(j.pairs||[]).filter(p=>p&&p.a&&p.b),tray:j.tray||[],note:j.note||'',W:last.W,H:last.H,pick:0};showAI();}
+  catch(e){el.className='plan danger';el.innerHTML=`<div class="big">${e.code==='rate_limited'?'Too many requests: wait a moment':e.code==='not_granted'?'Claude access was not allowed':'Something went wrong'}</div><small>${e.message||''}</small>`;}
+  aiBusy=false;}
+function boxPx(b){return{x:b[0]/1000*CL.W,y:b[1]/1000*CL.H,w:(b[2]-b[0])/1000*CL.W,h:(b[3]-b[1])/1000*CL.H};}
+function showAI(){const el=$('plan');el.className='plan';
+  if(!CL.pairs.length){el.className='plan danger';el.innerHTML=`<div class="big">No free pair spotted</div><small>${CL.note||'Try a sharper photo with the whole board in view, or use the game\'s hint.'}</small>`;return;}
+  const p=CL.pairs[CL.pick];
+  el.innerHTML=`<div class="big">Tap the two ${p.tile||'matching tiles'}</div>${p.where?p.where+'<br>':''}<small>${CL.pairs.length>1?`Pair ${CL.pick+1} of ${CL.pairs.length} · <a href="#" id="nextPair" style="color:var(--gold)">show another pair</a> · `:''}${CL.tray&&CL.tray.length?'Tray: '+CL.tray.join(', ')+' · ':''}Snap again after each move.${CL.note?' · '+CL.note:''}</small>`;
+  const np=$('nextPair');if(np)np.onclick=e=>{e.preventDefault();CL.pick=(CL.pick+1)%CL.pairs.length;showAI();};}
+function drawAI(){
+  const W=CL.W,H=CL.H;if(ov.width!==W||ov.height!==H){ov.width=W;ov.height=H;}octx.clearRect(0,0,W,H);if(!CL.pairs.length)return;
+  const p=CL.pairs[CL.pick];const A=boxPx(p.a),B=boxPx(p.b);const tw=Math.max(18,(A.w+B.w)/2),LW=Math.max(3,tw*0.12);const pulse=0.5+0.5*Math.sin(performance.now()/230);
+  octx.fillStyle='rgba(0,0,0,0.6)';octx.fillRect(0,0,W,H);for(const t of [A,B])octx.clearRect(t.x-LW,t.y-LW,t.w+LW*2,t.h+LW*2);
+  octx.save();octx.strokeStyle='rgba(255,225,77,.9)';octx.lineWidth=LW*0.9;octx.setLineDash([LW*2.5,LW*1.6]);octx.lineDashOffset=-performance.now()/30;octx.shadowColor='#ffd400';octx.shadowBlur=12;
+  octx.beginPath();octx.moveTo(A.x+A.w/2,A.y+A.h/2);octx.lineTo(B.x+B.w/2,B.y+B.h/2);octx.stroke();octx.restore();
+  [A,B].forEach((t,k)=>{octx.save();octx.shadowColor='#ffd400';octx.shadowBlur=14+18*pulse;octx.strokeStyle='#ffe14d';octx.lineWidth=LW*(1.1+0.5*pulse);octx.strokeRect(t.x-LW*0.5,t.y-LW*0.5,t.w+LW,t.h+LW);octx.restore();
+    const r=Math.max(16,tw*0.42);let by=t.y-r*1.25;if(by-r<0)by=t.y+t.h+r*1.25;badge(t.x+t.w/2,by,r,String(k+1),'#ffe14d','#111');});}
+$('aiBtn').onclick=()=>$('snapIn').click();
+$('snapIn').onchange=e=>{const f=e.target.files[0];if(!f)return;const im=new Image();im.onload=()=>aiSolve(im);im.src=URL.createObjectURL(f);e.target.value='';};
 /* ---------------- demo board (synthetic, with camera-like blur/noise) ---------------- */
 function drawFace(g,type,x,y,w,h){
   const [suit,v]=type;const cx=x+w/2,cy=y+h/2;
