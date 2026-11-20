@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mahjong Solitaire Matcher</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,700&family=IBM+Plex+Sans:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#10151c;--panel:#1a222d;--line:rgba(255,255,255,.1);--ink:#eef2f6;--muted:#9fb0c2;--gold:#f0b94a}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:"IBM Plex Sans",system-ui,sans-serif}
+body{padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+.wrap{max-width:1100px;margin:0 auto;padding:12px}
+header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+h1{font:700 22px Fraunces,serif;margin:0}
+h1 span{color:var(--gold)}
+.sub{color:var(--muted);font-size:13px}
+.bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+button,.filebtn{background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:10px 14px;font:600 14px "IBM Plex Sans";cursor:pointer}
+button.on{background:var(--gold);color:#1d1404;border-color:var(--gold)}
+button:disabled{opacity:.4}
+.filebtn input{display:none}
+.stage{position:relative;width:100%;background:#000;border-radius:12px;overflow:hidden;min-height:200px;touch-action:manipulation}
+.stage video,.stage canvas{display:block;width:100%;height:auto}
+#overlay{position:absolute;inset:0;width:100%;height:100%}
+#video{position:absolute;inset:0;opacity:0}
+.status{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin:10px 0;font-size:14px}
+.pill{background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:5px 12px}
+.pill b{color:var(--gold)}
+details{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin-top:10px}
+summary{cursor:pointer;font-weight:600}
+.ctl{display:grid;grid-template-columns:150px 1fr 48px;gap:8px;align-items:center;margin:8px 0;font-size:13px;color:var(--muted)}
+input[type=range]{width:100%;accent-color:var(--gold)}
+.note{font-size:12.5px;color:var(--muted);line-height:1.5}
+.hint{padding:40px 16px;text-align:center;color:var(--muted)}
+.undo{display:inline-flex;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:4px 8px;font-size:13px;color:var(--muted)}
+.undo button{padding:4px 10px}.undo b{color:var(--ink);min-width:12px;text-align:center}
+.plan{background:#1f2a1f;border:1px solid rgba(240,185,74,.5);border-radius:12px;padding:10px 14px;margin-bottom:10px;font-size:15px;line-height:1.45}
+.plan .big{font:700 18px Fraunces,serif;color:var(--gold)}.plan.danger{background:#3a1717;border-color:#ff6f61}.plan.danger .big{color:#ff8a7a}
+.plan small{color:var(--muted);display:block;margin-top:4px}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12.5px;color:var(--muted);margin-top:6px}
+.legend i{display:inline-block;width:14px;height:10px;border-radius:2px;margin-right:5px;vertical-align:middle}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><h1>Mahjong Solitaire <span>Matcher</span></h1><div class="sub">Point a camera at the game, or load a screenshot. Matching pairs light up.</div></header>
+  <div class="bar">
+    <button id="camBtn">📷 Live camera</button>
+    <button id="freezeBtn" disabled>⏸ Freeze</button>
+    <label class="filebtn">🖼 Screenshot / photo<input type="file" id="fileIn" accept="image/*"></label>
+    <button id="demoBtn">Demo board</button>
+    <button id="trayBtn">▭ Mark tray</button>
+    <span class="undo">Undos left <button id="uMinus">−</button><b id="uVal">3</b><button id="uPlus">+</button></span>
+  </div>
+  <div id="plan" class="plan" style="display:none"></div>
+  <div class="stage" id="stage">
+    <video id="video" playsinline muted></video>
+    <canvas id="view"></canvas>
+    <canvas id="overlay"></canvas>
+    <div class="hint" id="hint">Start the live camera (hold your phone parallel to the iPad, board filling the frame), load a screenshot, or try the demo board.</div>
+  </div>
+  <div class="status" id="status"></div>
+  <div class="legend"><span><i style="background:#fff"></i>White ① ② = do this next</span><span><i style="background:#c792ea"></i>Tile in your tray</span><span><i style="background:#f0b94a"></i>Free pair</span><span><i style="background:#58c4dd;opacity:.8"></i>Same picture, but at least one is blocked</span><span><i style="border:1px dashed #889;"></i>No visible match yet</span><span>Tap a tile to see its matches.</span></div>
+  <details>
+    <summary>Tuning</summary>
+    <div class="ctl"><span>Tile brightness</span><input type="range" id="tBright" min="-60" max="60" value="0"><span id="vBright">auto</span></div>
+    <div class="ctl"><span>Max tile color (saturation)</span><input type="range" id="tSat" min="20" max="140" value="70"><span id="vSat">70</span></div>
+    <div class="ctl"><span>Match strictness</span><input type="range" id="tMatch" min="70" max="98" value="88"><span id="vMatch">0.88</span></div>
+    <div class="ctl"><span>Show detection mask</span><input type="checkbox" id="tMask"><span></span></div>
+    <p class="note">If tiles aren't found, move the brightness slider until the mask covers the tile faces. If different tiles get paired, raise strictness; if identical tiles don't pair, lower it.<br>
+    How it works: it finds the bright, low-color tile faces, keeps only faces that are fully visible (a tile with another tile on top shows only part of its face), compares each tile's picture against the others, and groups identical ones. A tile counts as "free" when no visible tile touches its left or its right side. That's a best guess from one camera angle, so double-check before tapping. Flower and season tiles match within their set in most games, but they look different, so this tool won't pair them.</p>
+  </details>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const view=$('view'),ov=$('overlay'),vctx=view.getContext('2d',{willReadFrequently:true}),octx=ov.getContext('2d');
+const video=$('video');
+let mode=null,frozen=false,stream=null,last=null,selected=-1,busy=false;
+const P={bright:0,sat:70,match:0.88,mask:false};
+let TRAY=null;try{TRAY=JSON.parse(localStorage.getItem('mj-tray')||'null');}catch(e){}
+let UNDOS=3,marking=false,dragA=null;
+const PAL=['#f0b94a','#ff6f61','#7bd389','#58c4dd','#c792ea','#ffd166','#ef476f','#06d6a0','#118ab2','#f78c6b','#a0c4ff','#caffbf','#ffadad','#bdb2ff','#fdffb6','#9bf6ff'];
+
+/* ---------------- vision ---------------- */
+function analyze(img,W,H,hd){
+  const d=img.data,N=W*H;const HD=hd||{data:d,W,H,s:1};
+  const lum=new Float32Array(N),sat=new Uint8Array(N);
+  const hist=new Uint32Array(256);
+  for(let i=0,j=0;i<N;i++,j+=4){const r=d[j],g=d[j+1],b=d[j+2];const mx=Math.max(r,g,b),mn=Math.min(r,g,b);const l=0.299*r+0.587*g+0.114*b;lum[i]=l;sat[i]=mx-mn;hist[l|0]++;}
+  // Otsu threshold on luminance
+  let sum=0;for(let t=0;t<256;t++)sum+=t*hist[t];let sB=0,wB=0,best=0,thr=160;
+  for(let t=0;t<256;t++){wB+=hist[t];if(!wB)continue;const wF=N-wB;if(!wF)break;sB+=t*hist[t];const mB=sB/wB,mF=(sum-sB)/wF;const v=wB*wF*(mB-mF)*(mB-mF);if(v>best){best=v;thr=t;}}
+  // second pass: split the bright class into tile faces vs. tile sides/edges
+  {let n2=0,s2=0;for(let t=thr+1;t<256;t++){n2+=hist[t];s2+=t*hist[t];}
+   if(n2>N*0.05){let wB2=0,sB2=0,best2=0,thr2=thr;for(let t=thr+1;t<256;t++){wB2+=hist[t];if(!wB2)continue;const wF=n2-wB2;if(!wF)break;sB2+=t*hist[t];const mB=sB2/wB2,mF=(s2-sB2)/wF;const v=wB2*wF*(mB-mF)*(mB-mF);if(v>best2){best2=v;thr2=t;}}
+     let above=0;for(let t=thr2+1;t<256;t++)above+=hist[t];if(above>n2*0.35&&(thr2-thr)>12)thr=thr2;}}
+  thr=Math.max(60,Math.min(245,thr+P.bright));
+  let mask=new Uint8Array(N);
+  for(let i=0;i<N;i++)mask[i]=(lum[i]>thr&&sat[i]<P.sat)?1:0;
+  // close small holes (symbol strokes) inside faces: dilate then erode, then erode once more to split touching faces
+  mask=morph(mask,W,H,1,true);mask=morph(mask,W,H,1,false);mask=morph(mask,W,H,1,false);
+  mask=fillHoles(mask,W,H);
+  // connected components
+  const lab=new Int32Array(N).fill(-1);const comps=[];const stack=new Int32Array(N);
+  for(let i=0;i<N;i++){if(!mask[i]||lab[i]>=0)continue;let sp=0;stack[sp++]=i;lab[i]=comps.length;let x0=W,y0=H,x1=0,y1=0,area=0;
+    while(sp){const k=stack[--sp];const x=k%W,y=(k/W)|0;area++;if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;
+      if(x>0&&mask[k-1]&&lab[k-1]<0){lab[k-1]=lab[i];stack[sp++]=k-1;}if(x<W-1&&mask[k+1]&&lab[k+1]<0){lab[k+1]=lab[i];stack[sp++]=k+1;}
+      if(y>0&&mask[k-W]&&lab[k-W]<0){lab[k-W]=lab[i];stack[sp++]=k-W;}if(y<H-1&&mask[k+W]&&lab[k+W]<0){lab[k+W]=lab[i];stack[sp++]=k+W;}}
+    comps.push({x0,y0,x1:x1+1,y1:y1+1,area});}
+  const minA=N*0.0006;
+  const cand=comps.filter(c=>c.area>minA).map(c=>({...c,w:c.x1-c.x0,h:c.y1-c.y0,fill:c.area/((c.x1-c.x0)*(c.y1-c.y0))}));
+  // typical tile size from single-tile-looking blobs
+  const TR=TRAY?{x0:TRAY.x0*W,y0:TRAY.y0*H,x1:TRAY.x1*W,y1:TRAY.y1*H}:null;
+  const inTray=c=>TR&&((c.x0+c.x1)/2)>TR.x0&&((c.x0+c.x1)/2)<TR.x1&&((c.y0+c.y1)/2)>TR.y0&&((c.y0+c.y1)/2)<TR.y1;
+  const trayCand=TR?comps.filter(c=>c.area>minA*0.4&&inTray(c)).map(c=>({...c,w:c.x1-c.x0,h:c.y1-c.y0,fill:c.area/((c.x1-c.x0)*(c.y1-c.y0))})):[];
+  const boardCand=cand.filter(c=>!inTray(c));
+  const singles=boardCand.filter(c=>c.fill>0.7&&c.h/c.w>1.05&&c.h/c.w<1.9);
+  if(singles.length<4)return{tiles:[],groups:[],thr,mask,reason:'No tile faces found. Try the brightness slider.'};
+  const med=a=>{const s=[...a].sort((x,y)=>x-y);return s[s.length>>1];};
+  // use the larger half (fully visible faces are the biggest)
+  const ws=singles.map(c=>c.w).sort((a,b)=>a-b),hs=singles.map(c=>c.h).sort((a,b)=>a-b);
+  const tw=med(ws.slice(Math.floor(ws.length*0.3))),th=med(hs.slice(Math.floor(hs.length*0.3)));
+  const tiles=[];
+  for(const c of boardCand){
+    const nx=Math.round(c.w/tw),ny=Math.round(c.h/th);
+    if(nx<1||ny<1)continue;
+    const exW=Math.abs(c.w/nx-tw)/tw,exH=Math.abs(c.h/ny-th)/th;
+    if(exW>0.2||exH>0.2||c.fill<0.62)continue; // partial (covered) faces get dropped here
+    if(nx*ny>12)continue;
+    for(let a=0;a<nx;a++)for(let b=0;b<ny;b++){const x=c.x0+a*c.w/nx,y=c.y0+b*c.h/ny;tiles.push({x,y,w:c.w/nx,h:c.h/ny});}
+  }
+  const nBoard=tiles.length;
+  // tray tiles: their own size (slots are often drawn smaller); split blobs that hold several touching tiles
+  if(trayCand.length){const tc=trayCand.filter(c=>c.fill>0.55&&c.h/c.w>0.5);const th2=tc.length?Math.max(...tc.map(c=>c.h)):0;
+    for(const c of tc){if(c.h<th2*0.7)continue;const k=Math.max(1,Math.round(c.w/(c.h/1.33)));if(k>4)continue;for(let a=0;a<k;a++)tiles.push({x:c.x0+a*c.w/k,y:c.y0,w:c.w/k,h:c.h,tray:true});}}
+  // features
+  const FX=18,FY=24,GX=FX+2,GY=FY+2;const hdD=HD.data,HW=HD.W,HH=HD.H,hsc=HD.s;
+  const norm=v=>{let mean=0;for(let k=0;k<v.length;k++)mean+=v[k];mean/=v.length;let e=0;const o=new Float32Array(v.length);for(let k=0;k<v.length;k++){o[k]=v[k]-mean;e+=o[k]*o[k];}const nr=Math.sqrt(e);if(nr>1e-6)for(let k=0;k<o.length;k++)o[k]/=nr;return{v:o,e:nr};};
+  const bandsDef=[[0,9],[8,16],[15,24]];
+  for(const t of tiles){
+    // sample a slightly larger grid so we can try +/-1 cell shifts
+    const iw0=t.w*hsc*0.68,ih0=t.h*hsc*0.72,cw=iw0/FX,chh=ih0/FY;
+    const ix=t.x*hsc+t.w*hsc*0.16-cw,iy=t.y*hsc+t.h*hsc*0.14-chh;
+    let fr=0,fg=0,fb=0,fn=0;const raw=new Float32Array(GX*GY*3);
+    for(let gy=0;gy<GY;gy++)for(let gx=0;gx<GX;gx++){
+      let r=0,g=0,b=0,n=0;const sx0=ix+gx*cw,sy0=iy+gy*chh;
+      for(let yy=0;yy<3;yy++)for(let xx=0;xx<3;xx++){const px=Math.max(0,Math.min(HW-1,(sx0+(xx+0.5)*cw/3)|0)),py=Math.max(0,Math.min(HH-1,(sy0+(yy+0.5)*chh/3)|0));const j=(py*HW+px)*4;r+=hdD[j];g+=hdD[j+1];b+=hdD[j+2];n++;}
+      r/=n;g/=n;b/=n;const k=(gy*GX+gx)*3;raw[k]=r;raw[k+1]=g;raw[k+2]=b;
+      if(0.299*r+0.587*g+0.114*b>thr){fr+=r;fg+=g;fb+=b;fn++;}
+    }
+    fr=fn?fr/fn:230;fg=fn?fg/fn:225;fb=fn?fb/fn:210;
+    const f=new Float32Array(GX*GY*3);
+    for(let k=0;k<f.length;k+=3){f[k]=Math.max(0,(fr-raw[k])/fr);f[k+1]=Math.max(0,(fg-raw[k+1])/fg);f[k+2]=Math.max(0,(fb-raw[k+2])/fb);}
+    const hp=new Float32Array(f.length);const R=3;
+    for(let gy=0;gy<GY;gy++)for(let gx=0;gx<GX;gx++)for(let ch=0;ch<3;ch++){let sm=0,n=0;for(let dy=-R;dy<=R;dy++)for(let dx=-R;dx<=R;dx++){const x=gx+dx,y=gy+dy;if(x<0||y<0||x>=GX||y>=GY)continue;sm+=f[(y*GX+x)*3+ch];n++;}hp[(gy*GX+gx)*3+ch]=f[(gy*GX+gx)*3+ch]-0.6*sm/n;}
+    const g2=new Float32Array(f.length);
+    for(let gy=0;gy<GY;gy++)for(let gx=0;gx<GX;gx++)for(let ch=0;ch<3;ch++){let sm=0,n=0;for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){const x=gx+dx,y=gy+dy;if(x<0||y<0||x>=GX||y>=GY)continue;const wgt=(dx||dy)?0.4:1;sm+=hp[(y*GX+x)*3+ch]*wgt;n+=wgt;}g2[(gy*GX+gx)*3+ch]=sm/n;}
+    // 9 shifted windows, each with whole + band vectors
+    t.win=[];
+    for(let oy=0;oy<3;oy++)for(let ox=0;ox<3;ox++){const v=new Float32Array(FX*FY*3);let q=0;for(let gy=0;gy<FY;gy++)for(let gx=0;gx<FX;gx++){const k=((gy+oy)*GX+(gx+ox))*3;v[q++]=g2[k];v[q++]=g2[k+1];v[q++]=g2[k+2];}
+      const w=norm(v);t.win.push({f:w.v,ink:w.e,bands:bandsDef.map(([y0,y1])=>norm(v.slice(y0*FX*3,y1*FX*3)))});}
+    t.f=t.win[4].f;t.ink=t.win[4].ink;t.bands=t.win[4].bands;t.cx=t.x+t.w/2;t.cy=t.y+t.h/2;
+  }
+  // similarities and grouping (max 4 per group)
+  const n=nBoard,edges=[];
+  const dot=(a,b)=>{let s=0;for(let k=0;k<a.length;k++)s+=a[k]*b[k];return s;};
+  const bandSim=(A,B,s)=>{const ref=Math.max(A.ink,B.ink)*0.08;
+    for(let q=0;q<3;q++){const a=A.bands[q],b=B.bands[q];const blankA=a.e<ref,blankB=b.e<ref;let bs;
+      if(blankA&&blankB)bs=1;else if(blankA||blankB)bs=0;else{bs=dot(a.v,b.v);const er=Math.min(a.e,b.e)/Math.max(a.e,b.e);bs*=0.7+0.3*er;}
+      s=Math.min(s,bs);}return s;};
+  const sim=(A,B)=>{const Bc=B.win[4];let best=-2,bw=null;for(const w of A.win){const s=dot(w.f,Bc.f);if(s>best){best=s;bw=w;}}
+    if(best<=P.match)return best;return bandSim(bw,Bc,best);};
+  window.__sim=sim;
+  const SM=new Map();for(let i=0;i<n;i++)for(let j=i+1;j<n;j++){const s=sim(tiles[i],tiles[j]);if(s>P.match-0.06)SM.set(i*n+j,s);if(s>P.match)edges.push([s,i,j]);}
+  const simOf=(i,j)=>i<j?(SM.get(i*n+j)??-1):(SM.get(j*n+i)??-1);
+  edges.sort((x,y)=>y[0]-x[0]);
+  const par=[...Array(n).keys()],size=new Array(n).fill(1);const find=x=>par[x]===x?x:(par[x]=find(par[x]));
+  const members=[...Array(n).keys()].map(i=>[i]);
+  for(const [s,i,j] of edges){const a=find(i),b=find(j);if(a===b)continue;if(size[a]+size[b]>4)continue;
+    // complete linkage: every tile in the merged group must match every other one
+    let ok=true;for(const x of members[a]){for(const y of members[b]){if(simOf(x,y)<P.match-0.05){ok=false;break;}}if(!ok)break;}
+    if(!ok)continue;par[b]=a;size[a]+=size[b];members[a]=members[a].concat(members[b]);}
+  // free heuristic (board tiles only); remember left/right neighbours for the planner
+  const board=tiles.slice(0,nBoard);
+  for(const t of board){let L=null,R=null;for(const o of board){if(o===t)continue;if(Math.abs(o.cy-t.cy)>t.h*0.45)continue;const gapL=t.x-(o.x+o.w),gapR=o.x-(t.x+t.w);if(gapL>-t.w*0.3&&gapL<t.w*0.3)L=board.indexOf(o);if(gapR>-t.w*0.3&&gapR<t.w*0.3)R=board.indexOf(o);}t.L=L;t.R=R;t.free=!(L!=null&&R!=null);}
+  const gm={};board.forEach((t,i)=>{const r=find(i);(gm[r]=gm[r]||[]).push(i);});
+  const groups=Object.values(gm).filter(g=>g.length>=2);
+  groups.forEach((g,k)=>g.forEach(i=>{tiles[i].g=k;}));
+  // link each tray tile to its best-matching board tile
+  for(let k=nBoard;k<tiles.length;k++){let best=-2,bj=-1;for(let j=0;j<nBoard;j++){const s=sim(tiles[k],tiles[j]);if(s>best){best=s;bj=j;}}tiles[k].link=best>P.match-0.03?bj:-1;tiles[k].linkSim=best;}
+  return{tiles,groups,thr,mask,tw,th,nBoard,TR};
+}
+function fillHoles(m,W,H){ // background pixels not connected to the image border are holes inside a tile face
+  const N=W*H,seen=new Uint8Array(N),st=new Int32Array(N);let sp=0;
+  const push=i=>{if(!m[i]&&!seen[i]){seen[i]=1;st[sp++]=i;}};
+  for(let x=0;x<W;x++){push(x);push((H-1)*W+x);}for(let y=0;y<H;y++){push(y*W);push(y*W+W-1);}
+  while(sp){const k=st[--sp];const x=k%W;if(x>0)push(k-1);if(x<W-1)push(k+1);if(k>=W)push(k-W);if(k<N-W)push(k+W);}
+  const o=new Uint8Array(N);for(let i=0;i<N;i++)o[i]=(m[i]||!seen[i])?1:0;return o;}
+function morph(m,W,H,r,dil){const o=new Uint8Array(m.length);
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){let v=dil?0:1;
+    for(let dy=-r;dy<=r&&(dil?!v:v);dy++)for(let dx=-r;dx<=r;dx++){const xx=x+dx,yy=y+dy;const q=(xx<0||yy<0||xx>=W||yy>=H)?0:m[yy*W+xx];if(dil&&q){v=1;break;}if(!dil&&!q){v=0;break;}}
+    o[y*W+x]=v;}return o;}
+
+/* ---------------- planner (4-slot tray, 4 unmatched = turn over) ---------------- */
+function plan(res){
+  const T=res.tiles,nB=res.nBoard;const tray=T.slice(nB);const trayN=TRAY?tray.length:0;
+  const key=i=>T[i].g!=null?'g'+T[i].g:'s'+i;
+  const trayKeys=new Map();tray.forEach((t,k)=>{if(t.link>=0)trayKeys.set(key(t.link),nB+k);});
+  const hasMatch=i=>{const k=key(i);return trayKeys.has(k)||(T[i].g!=null&&res.groups[T[i].g].some(j=>j!==i&&T[j].free));};
+  const frees=i=>{let b=0;for(const n of [T[i].L,T[i].R]){if(n==null)continue;const t=T[n];if(t.free)continue;const other=t.L===i?t.R:t.L;if(other==null){b+=hasMatch(n)?15:5;}}return b;};
+  const moves=[];
+  for(let i=0;i<nB;i++){if(!T[i].free)continue;const k=key(i);if(trayKeys.has(k))moves.push({kind:'finish',taps:[i],tray:trayKeys.get(k),score:100+frees(i)});}
+  res.groups.forEach((g,gi)=>{if(trayKeys.has('g'+gi))return;const fr=g.filter(i=>T[i].free);if(fr.length>=2){const [a,b]=fr.sort((x,y)=>frees(y)-frees(x));moves.push({kind:'pair',taps:[a,b],score:50+frees(a)+frees(b),ok:trayN<=2});}});
+  res.groups.forEach((g,gi)=>{if(trayKeys.has('g'+gi))return;const fr=g.filter(i=>T[i].free),bl=g.filter(i=>!T[i].free);if(fr.length===1&&bl.length){
+    const near=bl.some(j=>[T[j].L,T[j].R].some(n=>n!=null&&T[n].free));moves.push({kind:'store',taps:[fr[0]],score:(near?20:8)+frees(fr[0]),ok:trayN<=1||(trayN===2&&UNDOS>0&&near),near});}});
+  const legal=moves.filter(m=>m.kind==='finish'||m.ok);legal.sort((a,b)=>b.score-a.score);
+  return{trayN,legal,moves,best:legal[0]||null};
+}
+/* ---------------- drawing ---------------- */
+function showPlan(res,pl){const el=$('plan');if(res.reason){el.style.display='none';return;}el.style.display='';el.className='plan';
+  const trayTxt=TRAY?`Tray ${pl.trayN}/4`:'Tray not marked (assuming empty)';const u=`Undos left: ${UNDOS}`;
+  if(!TRAY){el.innerHTML=`<div class="big">${pl.best?moveText(pl.best):'No safe move found'}</div><small>${trayTxt} · ${u}. Tap <b>▭ Mark tray</b> and drag a box over the 4 slots so I can read them.</small>`;return;}
+  if(pl.trayN>=3&&(!pl.best||pl.best.kind!=='finish')){el.className='plan danger';el.innerHTML=`<div class="big">Careful: ${pl.trayN} tiles in the tray</div>Any tap that doesn't match a tray tile ends your turn.${UNDOS?` No matching tile looks free, so use an <b>undo</b> (${UNDOS} left) to take back a stored tile.`:' No matching tile looks free and you have no undos left.'}<small>${trayTxt} · ${u}</small>`;return;}
+  if(!pl.best){el.className='plan danger';el.innerHTML=`<div class="big">No safe move visible</div>${UNDOS?`Undo your last move (${UNDOS} left) and try a different pair, or double-check the board: the camera may have missed a free tile.`:'Check the board yourself: the camera may have missed a free tile.'}<small>${trayTxt} · ${u}</small>`;return;}
+  const nAlt=pl.legal.length-1;
+  el.innerHTML=`<div class="big">${moveText(pl.best)}</div>${whyText(pl.best,pl)}<small>${trayTxt} · ${u}${nAlt>0?` · ${nAlt} other safe move${nAlt>1?'s':''} available`:''}</small>`;}
+function moveText(m){return m.kind==='finish'?'Tap ① to clear the tile in your tray':m.kind==='pair'?'Tap ① then ② (a free pair)':'Store ①: its match is close to free';}
+function whyText(m,pl){if(m.kind==='finish')return'It matches a tile already in your tray, so the pair clears and frees a slot.';
+  if(m.kind==='pair')return pl.trayN===2?'Your tray goes to 3 for a moment, then the pair clears back to 2.':'Both tiles look free, so the pair clears straight away and your tray stays the same.';
+  return`Nothing better is available. Its match is ${m.near?'next to a free tile, so it should open up soon':'blocked'}; your tray goes to ${pl.trayN+1}/4.${pl.trayN+1>=3?' After this, only tap tiles that match your tray.':''}`;}
+function draw(res,W,H){
+  ov.width=W;ov.height=H;octx.clearRect(0,0,W,H);
+  if(P.mask&&res.mask){const id=octx.createImageData(W,H);for(let i=0;i<res.mask.length;i++){if(res.mask[i]){id.data[i*4]=255;id.data[i*4+1]=60;id.data[i*4+2]=200;id.data[i*4+3]=110;}}octx.putImageData(id,0,0);}
+  const lw=Math.max(2,W/400);
+  let freePairs=0;
+  res.groups.forEach((g,k)=>{const fr=g.filter(i=>res.tiles[i].free);g.playable=fr.length>=2;if(g.playable)freePairs++;});
+  res.tiles.forEach((t,i)=>{
+    const grp=t.g!=null?res.groups[t.g]:null;
+    const sel=selected>=0&&res.tiles[selected]&&res.tiles[selected].g!=null&&res.tiles[selected].g===t.g;
+    if(!grp){octx.setLineDash([lw*2,lw*2]);octx.strokeStyle='rgba(140,150,170,.7)';octx.lineWidth=lw*0.7;octx.strokeRect(t.x,t.y,t.w,t.h);octx.setLineDash([]);return;}
+    const best=grp.playable&&t.free;
+    octx.strokeStyle=sel?'#ffffff':best?PAL[t.g%PAL.length]:'rgba(88,196,221,.75)';
+    octx.lineWidth=sel?lw*2.6:best?lw*1.8:lw*0.9;
+    octx.strokeRect(t.x+lw/2,t.y+lw/2,t.w-lw,t.h-lw);
+    if(best||sel){octx.fillStyle=sel?'rgba(255,255,255,.18)':PAL[t.g%PAL.length]+'33';octx.fillRect(t.x,t.y,t.w,t.h);
+      const fs=Math.max(10,t.h*0.22),lbl=String(t.g+1),bw=fs*(lbl.length>1?1.35:0.9),bh=fs*1.1,bx=t.x+t.w-bw-lw,by=t.y+t.h-bh-lw;octx.font=`700 ${fs}px "IBM Plex Sans",sans-serif`;octx.fillStyle='rgba(0,0,0,.78)';octx.fillRect(bx,by,bw,bh);octx.fillStyle=sel?'#fff':PAL[t.g%PAL.length];octx.textAlign='center';octx.fillText(lbl,bx+bw/2,by+bh*0.82);octx.textAlign='left';}
+  });
+  // tray tiles + links
+  const nB=res.nBoard??res.tiles.length;
+  if(res.TR){octx.setLineDash([lw*3,lw*2]);octx.strokeStyle='rgba(199,146,234,.8)';octx.lineWidth=lw;octx.strokeRect(res.TR.x0,res.TR.y0,res.TR.x1-res.TR.x0,res.TR.y1-res.TR.y0);octx.setLineDash([]);}
+  res.tiles.slice(nB).forEach(t=>{octx.strokeStyle='#c792ea';octx.lineWidth=lw*1.8;octx.strokeRect(t.x,t.y,t.w,t.h);
+    if(t.link>=0){const b=res.tiles[t.link];octx.setLineDash([lw*2,lw*2]);octx.strokeStyle='rgba(199,146,234,.9)';octx.lineWidth=lw;octx.beginPath();octx.moveTo(t.x+t.w/2,t.y);octx.lineTo(b.x+b.w/2,b.y+b.h);octx.stroke();octx.setLineDash([]);}});
+  // the recommended move
+  const pl=plan(res);res.plan=pl;
+  if(pl.best){pl.best.taps.forEach((i,k)=>{const t=res.tiles[i];octx.strokeStyle='#ffffff';octx.lineWidth=lw*3.2;octx.strokeRect(t.x-lw,t.y-lw,t.w+lw*2,t.h+lw*2);
+    const r=Math.max(11,t.h*0.2);octx.beginPath();octx.arc(t.x+r*0.9,t.y+r*0.9,r,0,7);octx.fillStyle='#fff';octx.fill();octx.fillStyle='#111';octx.font=`700 ${r*1.3}px "IBM Plex Sans",sans-serif`;octx.textAlign='center';octx.fillText(String(k+1),t.x+r*0.9,t.y+r*1.35);octx.textAlign='left';});}
+  showPlan(res,pl);
+  const nT=nB,nG=res.groups.length;
+  $('status').innerHTML=res.reason?`<span class="pill">${res.reason}</span>`:
+   `<span class="pill"><b>${nT}</b> top tiles seen</span><span class="pill"><b>${freePairs}</b> playable match${freePairs===1?'':'es'}</span><span class="pill"><b>${nG}</b> matching group${nG===1?'':'s'} total</span>${freePairs?'<span class="pill">Gold/colored numbers = tap both tiles with the same number</span>':nG?'<span class="pill">Matches exist but look blocked: clear the sides first</span>':''}`;
+}
+
+/* ---------------- sources ---------------- */
+const MAXW=720,HDW=1500;const hdc=document.createElement('canvas'),hctx=hdc.getContext('2d',{willReadFrequently:true});let lastHD=null;
+function grabFrom(src,sw,sh){const s=Math.min(1,MAXW/sw);const W=Math.round(sw*s),H=Math.round(sh*s);view.width=W;view.height=H;vctx.drawImage(src,0,0,W,H);
+  const s2=Math.min(1,HDW/sw);hdc.width=Math.round(sw*s2);hdc.height=Math.round(sh*s2);hctx.drawImage(src,0,0,hdc.width,hdc.height);
+  lastHD={data:hctx.getImageData(0,0,hdc.width,hdc.height).data,W:hdc.width,H:hdc.height,s:hdc.width/W};return vctx.getImageData(0,0,W,H);}
+function process(src,sw,sh){if(busy)return;busy=true;try{const img=grabFrom(src,sw,sh);last={res:analyze(img,img.width,img.height,lastHD),W:img.width,H:img.height};draw(last.res,last.W,last.H);}catch(e){$('status').textContent='Error: '+e.message;}busy=false;}
+function reprocess(){if(!last)return;const img=vctx.getImageData(0,0,last.W,last.H);last.res=analyze(img,last.W,last.H,lastHD);draw(last.res,last.W,last.H);}
+async function startCam(){
+  if(stream){stopCam();return;}
+  try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}},audio:false});}
+  catch(e){$('status').innerHTML=`<span class="pill">Camera unavailable here (${e.name||e.message}). If you're viewing this inside the chat, open the downloaded file directly in Chrome or Safari, or use a screenshot instead.</span>`;return;}
+  video.srcObject=stream;await video.play();mode='cam';frozen=false;$('hint').style.display='none';$('camBtn').classList.add('on');$('camBtn').textContent='■ Stop camera';$('freezeBtn').disabled=false;$('freezeBtn').textContent='⏸ Freeze';
+  loop();
+}
+function stopCam(){if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;mode=null;$('camBtn').classList.remove('on');$('camBtn').textContent='📷 Live camera';$('freezeBtn').disabled=true;}
+let lastT=0;
+let procMs=250;
+function loop(){if(mode!=='cam')return;requestAnimationFrame(loop);if(frozen)return;const now=performance.now();if(now-lastT<Math.max(250,procMs*1.6))return;lastT=now;if(video.videoWidth){const t0=performance.now();process(video,video.videoWidth,video.videoHeight);procMs=procMs*0.7+(performance.now()-t0)*0.3;}}
+$('camBtn').onclick=startCam;
+$('freezeBtn').onclick=()=>{frozen=!frozen;$('freezeBtn').textContent=frozen?'▶ Resume':'⏸ Freeze';$('freezeBtn').classList.toggle('on',frozen);};
+$('fileIn').onchange=e=>{const f=e.target.files[0];if(!f)return;stopCam();const im=new Image();im.onload=()=>{mode='img';$('hint').style.display='none';selected=-1;process(im,im.naturalWidth,im.naturalHeight);};im.src=URL.createObjectURL(f);};
+$('demoBtn').onclick=()=>{stopCam();const c=makeDemo();if(!TRAY||TRAY.demo){TRAY={...window.__demoTrayRect,demo:true};}mode='img';$('hint').style.display='none';selected=-1;process(c,c.width,c.height);};
+const frac=e=>{const r=ov.getBoundingClientRect();return{x:(e.clientX-r.left)/r.width,y:(e.clientY-r.top)/r.height};};
+$('trayBtn').onclick=()=>{if(!last){$('status').innerHTML='<span class="pill">Load a screenshot or start the camera first.</span>';return;}marking=!marking;$('trayBtn').classList.toggle('on',marking);$('trayBtn').textContent=marking?'Drag over the 4 slots…':'▭ Mark tray';if(marking&&mode==='cam'&&!frozen)$('freezeBtn').click();};
+ov.addEventListener('pointerdown',e=>{if(!marking)return;dragA=frac(e);e.preventDefault();});
+ov.addEventListener('pointermove',e=>{if(!marking||!dragA||!last)return;const b=frac(e);draw(last.res,last.W,last.H);octx.strokeStyle='#c792ea';octx.lineWidth=3;octx.strokeRect(dragA.x*last.W,dragA.y*last.H,(b.x-dragA.x)*last.W,(b.y-dragA.y)*last.H);});
+ov.addEventListener('pointerup',e=>{if(!marking||!dragA)return;const b=frac(e);const r={x0:Math.min(dragA.x,b.x),y0:Math.min(dragA.y,b.y),x1:Math.max(dragA.x,b.x),y1:Math.max(dragA.y,b.y)};dragA=null;
+  if(r.x1-r.x0>0.03&&r.y1-r.y0>0.02){TRAY=r;try{localStorage.setItem('mj-tray',JSON.stringify(TRAY));}catch(err){}}marking=false;$('trayBtn').classList.remove('on');$('trayBtn').textContent='▭ Mark tray';reprocess();
+  if(mode==='cam'&&frozen)$('freezeBtn').click();});
+$('uMinus').onclick=()=>{UNDOS=Math.max(0,UNDOS-1);$('uVal').textContent=UNDOS;if(last)draw(last.res,last.W,last.H);};
+$('uPlus').onclick=()=>{UNDOS=Math.min(9,UNDOS+1);$('uVal').textContent=UNDOS;if(last)draw(last.res,last.W,last.H);};
+ov.addEventListener('click',e=>{if(!last||marking)return;const r=ov.getBoundingClientRect();const x=(e.clientX-r.left)*last.W/r.width,y=(e.clientY-r.top)*last.H/r.height;
+  const i=last.res.tiles.findIndex(t=>x>=t.x&&x<=t.x+t.w&&y>=t.y&&y<=t.y+t.h);selected=(i===selected)?-1:i;
+  if(mode==='cam'&&!frozen){frozen=true;$('freezeBtn').textContent='▶ Resume';$('freezeBtn').classList.add('on');}draw(last.res,last.W,last.H);});
+const bind=(id,key,fmt,scale=1)=>{const el=$(id);el.oninput=()=>{P[key]=el.type==='checkbox'?el.checked:(+el.value)*scale;const out=$('v'+id.slice(1));if(out)out.textContent=fmt(P[key]);reprocess();};};
+bind('tBright','bright',v=>v===0?'auto':(v>0?'+':'')+v);bind('tSat','sat',v=>v);bind('tMatch','match',v=>v.toFixed(2),0.01);bind('tMask','mask',()=>'');
+
+/* ---------------- demo board (synthetic, with camera-like blur/noise) ---------------- */
+function drawFace(g,type,x,y,w,h){
+  const [suit,v]=type;const cx=x+w/2,cy=y+h/2;
+  const red='#c0302a',green='#1f7a3a',blue='#1f4fa0',blk='#222';
+  if(suit==='d'){const pos={1:[[0,0]],2:[[0,-1],[0,1]],3:[[-1,-1],[0,0],[1,1]],4:[[-1,-1],[1,-1],[-1,1],[1,1]],5:[[-1,-1],[1,-1],[0,0],[-1,1],[1,1]],6:[[-1,-1],[1,-1],[-1,0],[1,0],[-1,1],[1,1]],7:[[-1,-1.2],[0,-0.8],[1,-0.4],[-1,0.6],[1,0.6],[-1,1.3],[1,1.3]],8:[[-1,-1.3],[1,-1.3],[-1,-0.45],[1,-0.45],[-1,0.45],[1,0.45],[-1,1.3],[1,1.3]],9:[[-1,-1],[0,-1],[1,-1],[-1,0],[0,0],[1,0],[-1,1],[0,1],[1,1]]}[v];
+    const r=v===1?w*0.3:w*0.12;pos.forEach(([a,b],k)=>{g.beginPath();g.arc(cx+a*w*0.26,cy+b*h*0.26,r,0,7);g.fillStyle=[blue,red,green][(k+v)%3];g.fill();g.beginPath();g.arc(cx+a*w*0.26,cy+b*h*0.26,r*0.45,0,7);g.fillStyle='#f6f0e0';g.fill();});}
+  else if(suit==='b'){const cols=v<=3?v:v<=6?3:3;const rows=Math.ceil(v/cols);for(let k=0;k<v;k++){const c=k%cols,r=(k/cols)|0;const bx=x+w*(0.5+(c-(cols-1)/2)*0.24)-w*0.05,by=y+h*(0.5+(r-(rows-1)/2)*0.27)-h*0.11;g.fillStyle=(k===0&&v===1)?red:(k%4===2?red:green);g.fillRect(bx,by,w*0.1,h*0.22);g.fillStyle='#f6f0e0';g.fillRect(bx,by+h*0.1,w*0.1,h*0.02);}}
+  else if(suit==='c'){g.fillStyle=blk;g.font=`700 ${h*0.36}px sans-serif`;g.textAlign='center';g.fillText(String(v),cx,cy-h*0.02);g.fillStyle=red;g.fillRect(cx-w*0.28,cy+h*0.1,w*0.56,h*0.07);g.fillRect(cx-w*0.04,cy+h*0.1,w*0.08,h*0.24);g.fillRect(cx-w*0.24,cy+h*0.28,w*0.48,h*0.06);}
+  else if(suit==='w'){g.fillStyle=blk;g.font=`700 ${h*0.5}px sans-serif`;g.textAlign='center';g.fillText('ESWN'[v-1],cx,cy+h*0.17);}
+  else if(suit==='r'){if(v===1){g.fillStyle=red;g.fillRect(cx-w*0.25,cy-h*0.28,w*0.5,h*0.56);}else if(v===2){g.fillStyle=green;g.beginPath();g.moveTo(cx,cy-h*0.32);g.lineTo(cx+w*0.3,cy);g.lineTo(cx,cy+h*0.32);g.lineTo(cx-w*0.3,cy);g.fill();}else{g.strokeStyle=blue;g.lineWidth=w*0.07;g.strokeRect(cx-w*0.27,cy-h*0.3,w*0.54,h*0.6);}}
+}
+function makeDemo(seed){
+  let s=seed||7;const rnd=()=>(s=(s*16807)%2147483647)/2147483647;
+  const W=1400,H=1180;const c=document.createElement('canvas');c.width=W;c.height=H;const g=c.getContext('2d');
+  const bgr=g.createLinearGradient(0,0,W,H);bgr.addColorStop(0,'#1d5a3f');bgr.addColorStop(1,'#123d2b');g.fillStyle=bgr;g.fillRect(0,0,W,H);
+  const types=[];for(let v=1;v<=9;v++){types.push(['d',v],['b',v],['c',v]);}for(let v=1;v<=4;v++)types.push(['w',v]);for(let v=1;v<=3;v++)types.push(['r',v]);
+  // layout: layer0 12x8 grid, layer1 8x4 centered, layer2 4x2
+  const tw=80,th=104,ox=(W-12*tw)/2,oy=(H-8*th)/2;const slots=[];
+  for(let L=0;L<3;L++){const nx=[12,8,4][L],ny=[8,4,2][L];const x0=ox+(12-nx)/2*tw-L*6,y0=oy+(8-ny)/2*th-L*8;for(let j=0;j<ny;j++)for(let i=0;i<nx;i++)slots.push({L,x:x0+i*tw,y:y0+j*th});}
+  const deck=[];let k=0;while(deck.length<slots.length){deck.push(types[k%types.length]);deck.push(types[k%types.length]);k++;}
+  for(let i=deck.length-1;i>0;i--){const j=(rnd()*(i+1))|0;[deck[i],deck[j]]=[deck[j],deck[i]];}
+  window.__demoTruth=[];
+  slots.forEach((sl,i)=>{const t=deck[i];const x=sl.x,y=sl.y;
+    g.fillStyle='rgba(0,0,0,.35)';g.fillRect(x+6,y+8,tw-2,th-2);
+    g.fillStyle='#b9a77e';g.fillRect(x+3,y+4,tw-2,th-2);
+    g.fillStyle='#f4eedc';g.fillRect(x,y,tw-5,th-6);
+    g.strokeStyle='#8f7f5a';g.lineWidth=2;g.strokeRect(x+1,y+1,tw-7,th-8);
+    drawFace(g,t,x,y,tw-5,th-6);
+    window.__demoTruth.push({L:sl.L,x,y,w:tw-5,h:th-6,t:t.join('')});});
+  // tray with 4 slots at the bottom; put 2 tiles in it (one matches a free board tile)
+  const ty=1040,tx0=W/2-2*96;g.fillStyle='#0b2a1e';g.fillRect(tx0-16,ty-14,4*96+32,124);
+  for(let k=0;k<4;k++){g.strokeStyle='#3d6b55';g.lineWidth=3;g.strokeRect(tx0+k*96+4,ty,84,96);}
+  const topTiles=window.__demoTruth.filter(a=>!window.__demoTruth.some(o=>o.L>a.L&&o.x<a.x+a.w-4&&o.x+o.w>a.x+4&&o.y<a.y+a.h-4&&o.y+o.h>a.y+4));
+  const trayTypes=[topTiles[0].t,'b9'];window.__demoTray=trayTypes;
+  trayTypes.forEach((tt,k)=>{const fw=64,fh=83,x=tx0+k*96+10,y=ty+6;g.fillStyle='#f4eedc';g.fillRect(x,y,fw,fh);g.strokeStyle='#8f7f5a';g.lineWidth=2;g.strokeRect(x+1,y+1,fw-2,fh-2);drawFace(g,[tt[0],+tt.slice(1)],x,y,fw,fh);});
+  window.__demoTrayRect={x0:(tx0-16)/W,y0:(ty-14)/H,x1:(tx0+4*96+16)/W,y1:(ty+110)/H};
+  // camera-like softening + noise + vignette
+  const c2=document.createElement('canvas');c2.width=W;c2.height=H;const g2=c2.getContext('2d');g2.filter='blur(1.2px) brightness(0.95) contrast(0.92)';g2.drawImage(c,0,0);
+  const id=g2.getImageData(0,0,W,H);for(let i=0;i<id.data.length;i+=4){const n=(rnd()-0.5)*18;id.data[i]+=n;id.data[i+1]+=n;id.data[i+2]+=n;}g2.putImageData(id,0,0);
+  const vg=g2.createRadialGradient(W/2,H/2,H*0.3,W/2,H/2,H*0.9);vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(1,'rgba(0,0,0,.35)');g2.fillStyle=vg;g2.fillRect(0,0,W,H);
+  return c2;
+}
+</script>
+</body>
+</html>
