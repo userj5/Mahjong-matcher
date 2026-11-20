@@ -50,6 +50,7 @@ input[type=range]{width:100%;accent-color:var(--gold)}
     <button id="freezeBtn" disabled>⏸ Freeze</button>
     <label class="filebtn">🖼 Screenshot / photo<input type="file" id="fileIn" accept="image/*"></label>
     <button id="demoBtn">Demo board</button>
+    <button id="allBtn">👁 Show all pairs</button>
     <button id="trayBtn">▭ Mark tray</button>
     <span class="undo">Undos left <button id="uMinus">−</button><b id="uVal">3</b><button id="uPlus">+</button></span>
   </div>
@@ -61,7 +62,7 @@ input[type=range]{width:100%;accent-color:var(--gold)}
     <div class="hint" id="hint">Start the live camera (hold your phone parallel to the iPad, board filling the frame), load a screenshot, or try the demo board.</div>
   </div>
   <div class="status" id="status"></div>
-  <div class="legend"><span><i style="background:#fff"></i>White ① ② = do this next</span><span><i style="background:#c792ea"></i>Tile in your tray</span><span><i style="background:#f0b94a"></i>Free pair</span><span><i style="background:#58c4dd;opacity:.8"></i>Same picture, but at least one is blocked</span><span><i style="border:1px dashed #889;"></i>No visible match yet</span><span>Tap a tile to see its matches.</span></div>
+  <div class="legend"><span><i style="background:#ffe14d"></i>Glowing ① ② = tap these next (everything else is dimmed)</span><span><i style="background:#c792ea"></i>Tile in your tray</span><span>👁 Show all pairs: every playable pair gets a big matching letter (A + A, B + B…)</span><span>Tap any tile to see its matches.</span></div>
   <details>
     <summary>Tuning</summary>
     <div class="ctl"><span>Tile brightness</span><input type="range" id="tBright" min="-60" max="60" value="0"><span id="vBright">auto</span></div>
@@ -229,37 +230,62 @@ function moveText(m){return m.kind==='finish'?'Tap ① to clear the tile in your
 function whyText(m,pl){if(m.kind==='finish')return'It matches a tile already in your tray, so the pair clears and frees a slot.';
   if(m.kind==='pair')return pl.trayN===2?'Your tray goes to 3 for a moment, then the pair clears back to 2.':'Both tiles look free, so the pair clears straight away and your tray stays the same.';
   return`Nothing better is available. Its match is ${m.near?'next to a free tile, so it should open up soon':'blocked'}; your tray goes to ${pl.trayN+1}/4.${pl.trayN+1>=3?' After this, only tap tiles that match your tray.':''}`;}
-function draw(res,W,H){
-  ov.width=W;ov.height=H;octx.clearRect(0,0,W,H);
+let SHOWALL=false;
+const LETTERS='ABCDEFGHJKLMNPQRSTUVWXYZ';
+function badge(x,y,r,txt,bg,fg){octx.save();octx.shadowColor='rgba(0,0,0,.6)';octx.shadowBlur=r*0.5;octx.beginPath();octx.arc(x,y,r,0,7);octx.fillStyle=bg;octx.fill();octx.restore();
+  octx.lineWidth=Math.max(2,r*0.12);octx.strokeStyle='#000';octx.beginPath();octx.arc(x,y,r,0,7);octx.stroke();
+  octx.fillStyle=fg;octx.font=`800 ${r*1.25}px "IBM Plex Sans",sans-serif`;octx.textAlign='center';octx.textBaseline='middle';octx.fillText(txt,x,y+r*0.05);octx.textAlign='left';octx.textBaseline='alphabetic';}
+function draw(res,W,H,animOnly){
+  if(ov.width!==W||ov.height!==H){ov.width=W;ov.height=H;}
+  octx.clearRect(0,0,W,H);
+  const T=res.tiles,nB=res.nBoard??T.length;
+  if(!animOnly){res.groups.forEach(g=>{g.playable=g.filter(i=>T[i].free).length>=2;});res.plan=plan(res);}
+  const pl=res.plan||{best:null};
   if(P.mask&&res.mask){const id=octx.createImageData(W,H);for(let i=0;i<res.mask.length;i++){if(res.mask[i]){id.data[i*4]=255;id.data[i*4+1]=60;id.data[i*4+2]=200;id.data[i*4+3]=110;}}octx.putImageData(id,0,0);}
-  const lw=Math.max(2,W/400);
-  let freePairs=0;
-  res.groups.forEach((g,k)=>{const fr=g.filter(i=>res.tiles[i].free);g.playable=fr.length>=2;if(g.playable)freePairs++;});
-  res.tiles.forEach((t,i)=>{
-    const grp=t.g!=null?res.groups[t.g]:null;
-    const sel=selected>=0&&res.tiles[selected]&&res.tiles[selected].g!=null&&res.tiles[selected].g===t.g;
-    if(!grp){octx.setLineDash([lw*2,lw*2]);octx.strokeStyle='rgba(140,150,170,.7)';octx.lineWidth=lw*0.7;octx.strokeRect(t.x,t.y,t.w,t.h);octx.setLineDash([]);return;}
-    const best=grp.playable&&t.free;
-    octx.strokeStyle=sel?'#ffffff':best?PAL[t.g%PAL.length]:'rgba(88,196,221,.75)';
-    octx.lineWidth=sel?lw*2.6:best?lw*1.8:lw*0.9;
-    octx.strokeRect(t.x+lw/2,t.y+lw/2,t.w-lw,t.h-lw);
-    if(best||sel){octx.fillStyle=sel?'rgba(255,255,255,.18)':PAL[t.g%PAL.length]+'33';octx.fillRect(t.x,t.y,t.w,t.h);
-      const fs=Math.max(10,t.h*0.22),lbl=String(t.g+1),bw=fs*(lbl.length>1?1.35:0.9),bh=fs*1.1,bx=t.x+t.w-bw-lw,by=t.y+t.h-bh-lw;octx.font=`700 ${fs}px "IBM Plex Sans",sans-serif`;octx.fillStyle='rgba(0,0,0,.78)';octx.fillRect(bx,by,bw,bh);octx.fillStyle=sel?'#fff':PAL[t.g%PAL.length];octx.textAlign='center';octx.fillText(lbl,bx+bw/2,by+bh*0.82);octx.textAlign='left';}
-  });
-  // tray tiles + links
-  const nB=res.nBoard??res.tiles.length;
-  if(res.TR){octx.setLineDash([lw*3,lw*2]);octx.strokeStyle='rgba(199,146,234,.8)';octx.lineWidth=lw;octx.strokeRect(res.TR.x0,res.TR.y0,res.TR.x1-res.TR.x0,res.TR.y1-res.TR.y0);octx.setLineDash([]);}
-  res.tiles.slice(nB).forEach(t=>{octx.strokeStyle='#c792ea';octx.lineWidth=lw*1.8;octx.strokeRect(t.x,t.y,t.w,t.h);
-    if(t.link>=0){const b=res.tiles[t.link];octx.setLineDash([lw*2,lw*2]);octx.strokeStyle='rgba(199,146,234,.9)';octx.lineWidth=lw;octx.beginPath();octx.moveTo(t.x+t.w/2,t.y);octx.lineTo(b.x+b.w/2,b.y+b.h);octx.stroke();octx.setLineDash([]);}});
-  // the recommended move
-  const pl=plan(res);res.plan=pl;
-  if(pl.best){pl.best.taps.forEach((i,k)=>{const t=res.tiles[i];octx.strokeStyle='#ffffff';octx.lineWidth=lw*3.2;octx.strokeRect(t.x-lw,t.y-lw,t.w+lw*2,t.h+lw*2);
-    const r=Math.max(11,t.h*0.2);octx.beginPath();octx.arc(t.x+r*0.9,t.y+r*0.9,r,0,7);octx.fillStyle='#fff';octx.fill();octx.fillStyle='#111';octx.font=`700 ${r*1.3}px "IBM Plex Sans",sans-serif`;octx.textAlign='center';octx.fillText(String(k+1),t.x+r*0.9,t.y+r*1.35);octx.textAlign='left';});}
+  const tw=res.tw||Math.max(20,W/25),LW=Math.max(3,tw*0.13);
+  const pulse=0.5+0.5*Math.sin(performance.now()/230);
+  const selG=selected>=0&&T[selected]&&T[selected].g!=null?T[selected].g:null;
+  const focus=!SHOWALL&&pl.best&&selG==null;
+  if(focus){
+    const taps=pl.best.taps.map(i=>T[i]);
+    const extra=pl.best.kind==='finish'&&pl.best.tray!=null?[T[pl.best.tray]]:[];
+    // dim everything except the tiles to tap (and the tray tile it clears)
+    octx.fillStyle='rgba(0,0,0,0.62)';octx.fillRect(0,0,W,H);
+    for(const t of [...taps,...extra])octx.clearRect(t.x-LW,t.y-LW,t.w+LW*2,t.h+LW*2);
+    // line joining the pair
+    const pts=[...taps,...extra];
+    if(pts.length>=2){octx.save();octx.strokeStyle='rgba(255,225,77,.9)';octx.lineWidth=LW*0.9;octx.setLineDash([LW*2.5,LW*1.6]);octx.lineDashOffset=-performance.now()/30;
+      octx.shadowColor='#ffd400';octx.shadowBlur=12;octx.beginPath();octx.moveTo(pts[0].x+pts[0].w/2,pts[0].y+pts[0].h/2);octx.lineTo(pts[1].x+pts[1].w/2,pts[1].y+pts[1].h/2);octx.stroke();octx.restore();}
+    // glowing, pulsing outlines + big numbered badges
+    taps.forEach((t,k)=>{octx.save();octx.shadowColor='#ffd400';octx.shadowBlur=14+18*pulse;octx.strokeStyle='#ffe14d';octx.lineWidth=LW*(1.1+0.5*pulse);
+      octx.strokeRect(t.x-LW*0.5,t.y-LW*0.5,t.w+LW,t.h+LW);octx.restore();
+      const r=Math.max(16,tw*0.45);let by=t.y-r*1.25;if(by-r<0)by=t.y+t.h+r*1.25;badge(t.x+t.w/2,by,r,String(k+1),'#ffe14d','#111');});
+    extra.forEach(t=>{octx.save();octx.shadowColor='#c792ea';octx.shadowBlur=14;octx.strokeStyle='#d9a8ff';octx.lineWidth=LW;octx.strokeRect(t.x-LW*0.5,t.y-LW*0.5,t.w+LW,t.h+LW);octx.restore();
+      const r=Math.max(13,tw*0.32);badge(t.x+t.w/2,t.y-r*1.2<r?t.y+t.h+r*1.2:t.y-r*1.2,r,'✓','#d9a8ff','#111');});
+  }else{
+    // show every playable pair: bold colour fill + big letter on each tile
+    let li=0;const letterOf={};
+    res.groups.forEach((g,gi)=>{if(g.playable)letterOf[gi]=LETTERS[li++%LETTERS.length];});
+    T.slice(0,nB).forEach(t=>{
+      const g=t.g;const isSel=selG!=null&&g===selG;
+      if(g==null){if(!isSel){octx.setLineDash([LW,LW]);octx.strokeStyle='rgba(160,170,190,.55)';octx.lineWidth=Math.max(1.5,LW*0.35);octx.strokeRect(t.x,t.y,t.w,t.h);octx.setLineDash([]);}return;}
+      const play=res.groups[g].playable&&t.free;const col=isSel?'#ffffff':PAL[g%PAL.length];
+      if(play||isSel){octx.fillStyle=col+(isSel?'33':'38');octx.fillRect(t.x,t.y,t.w,t.h);octx.save();octx.shadowColor=col;octx.shadowBlur=isSel?18:8;octx.strokeStyle=col;octx.lineWidth=LW*(isSel?1.4:1);octx.strokeRect(t.x+LW/2,t.y+LW/2,t.w-LW,t.h-LW);octx.restore();
+        const r=Math.max(13,tw*0.3);badge(t.x+r*0.55,t.y+r*0.55,r,isSel?(letterOf[g]||'•'):letterOf[g]||'•',col,'#111');}
+      else{octx.setLineDash([LW*1.2,LW*0.8]);octx.strokeStyle=col+'aa';octx.lineWidth=Math.max(2,LW*0.5);octx.strokeRect(t.x+2,t.y+2,t.w-4,t.h-4);octx.setLineDash([]);}
+    });
+  }
+  // tray tiles
+  if(res.TR){octx.setLineDash([LW*1.5,LW]);octx.strokeStyle='rgba(199,146,234,.8)';octx.lineWidth=Math.max(2,LW*0.4);octx.strokeRect(res.TR.x0,res.TR.y0,res.TR.x1-res.TR.x0,res.TR.y1-res.TR.y0);octx.setLineDash([]);}
+  if(!focus)T.slice(nB).forEach(t=>{octx.strokeStyle='#c792ea';octx.lineWidth=LW*0.8;octx.strokeRect(t.x,t.y,t.w,t.h);});
+  if(animOnly)return;
   showPlan(res,pl);
-  const nT=nB,nG=res.groups.length;
+  const freePairs=res.groups.filter(g=>g.playable).length,nG=res.groups.length;
   $('status').innerHTML=res.reason?`<span class="pill">${res.reason}</span>`:
-   `<span class="pill"><b>${nT}</b> top tiles seen</span><span class="pill"><b>${freePairs}</b> playable match${freePairs===1?'':'es'}</span><span class="pill"><b>${nG}</b> matching group${nG===1?'':'s'} total</span>${freePairs?'<span class="pill">Gold/colored numbers = tap both tiles with the same number</span>':nG?'<span class="pill">Matches exist but look blocked: clear the sides first</span>':''}`;
+   `<span class="pill"><b>${nB}</b> top tiles seen</span><span class="pill"><b>${freePairs}</b> playable pair${freePairs===1?'':'s'}</span><span class="pill"><b>${nG}</b> matching group${nG===1?'':'s'}</span>`;
 }
+// smooth pulsing between camera frames
+(function anim(){requestAnimationFrame(anim);if(last&&last.res&&!last.res.reason&&!marking&&!dragA&&(!SHOWALL||selected>=0||true))draw(last.res,last.W,last.H,true);})();
 
 /* ---------------- sources ---------------- */
 const MAXW=720,HDW=1500;const hdc=document.createElement('canvas'),hctx=hdc.getContext('2d',{willReadFrequently:true});let lastHD=null;
@@ -290,6 +316,7 @@ ov.addEventListener('pointermove',e=>{if(!marking||!dragA||!last)return;const b=
 ov.addEventListener('pointerup',e=>{if(!marking||!dragA)return;const b=frac(e);const r={x0:Math.min(dragA.x,b.x),y0:Math.min(dragA.y,b.y),x1:Math.max(dragA.x,b.x),y1:Math.max(dragA.y,b.y)};dragA=null;
   if(r.x1-r.x0>0.03&&r.y1-r.y0>0.02){TRAY=r;try{localStorage.setItem('mj-tray',JSON.stringify(TRAY));}catch(err){}}marking=false;$('trayBtn').classList.remove('on');$('trayBtn').textContent='▭ Mark tray';reprocess();
   if(mode==='cam'&&frozen)$('freezeBtn').click();});
+$('allBtn').onclick=()=>{SHOWALL=!SHOWALL;$('allBtn').classList.toggle('on',SHOWALL);$('allBtn').textContent=SHOWALL?'🎯 Next move only':'👁 Show all pairs';if(last)draw(last.res,last.W,last.H);};
 $('uMinus').onclick=()=>{UNDOS=Math.max(0,UNDOS-1);$('uVal').textContent=UNDOS;if(last)draw(last.res,last.W,last.H);};
 $('uPlus').onclick=()=>{UNDOS=Math.min(9,UNDOS+1);$('uVal').textContent=UNDOS;if(last)draw(last.res,last.W,last.H);};
 ov.addEventListener('click',e=>{if(!last||marking)return;const r=ov.getBoundingClientRect();const x=(e.clientX-r.left)*last.W/r.width,y=(e.clientY-r.top)*last.H/r.height;
