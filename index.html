@@ -51,15 +51,13 @@ input[type=range]{width:100%;accent-color:var(--gold)}
     <label class="filebtn">🖼 Screenshot / photo<input type="file" id="fileIn" accept="image/*"></label>
     <button id="demoBtn">Demo board</button>
     <button id="allBtn">👁 Show all pairs</button>
-    <button id="trayBtn">▭ Mark tray</button>
-    <span class="undo">Undos left <button id="uMinus">−</button><b id="uVal">3</b><button id="uPlus">+</button></span>
   </div>
   <div id="plan" class="plan" style="display:none"></div>
   <div class="stage" id="stage">
     <video id="video" playsinline muted></video>
     <canvas id="view"></canvas>
     <canvas id="overlay"></canvas>
-    <div class="hint" id="hint">Start the live camera (hold your phone parallel to the iPad, board filling the frame), load a screenshot, or try the demo board.</div>
+    <div class="hint" id="hint">Starting the camera… allow access when asked. Hold it steady with the whole board filling the screen. (No camera? Load a screenshot instead.)</div>
   </div>
   <div class="status" id="status"></div>
   <div class="legend"><span><i style="background:#ffe14d"></i>Glowing ① ② = tap these next (everything else is dimmed)</span><span><i style="background:#c792ea"></i>Tile in your tray</span><span>👁 Show all pairs: every playable pair gets a big matching letter (A + A, B + B…)</span><span>Tap any tile to see its matches.</span></div>
@@ -68,6 +66,8 @@ input[type=range]{width:100%;accent-color:var(--gold)}
     <div class="ctl"><span>Tile brightness</span><input type="range" id="tBright" min="-60" max="60" value="0"><span id="vBright">auto</span></div>
     <div class="ctl"><span>Max tile color (saturation)</span><input type="range" id="tSat" min="20" max="140" value="70"><span id="vSat">70</span></div>
     <div class="ctl"><span>Match strictness</span><input type="range" id="tMatch" min="70" max="98" value="88"><span id="vMatch">0.88</span></div>
+    <div class="ctl"><span>Tray game (optional)</span><span><button id="trayBtn">▭ Mark tray</button> <button id="trayClear">No tray</button></span><span></span></div>
+    <div class="ctl"><span>Undos left</span><span class="undo"><button id="uMinus">−</button><b id="uVal">3</b><button id="uPlus">+</button></span><span></span></div>
     <div class="ctl"><span>Show detection mask</span><input type="checkbox" id="tMask"><span></span></div>
     <p class="note">If tiles aren't found, move the brightness slider until the mask covers the tile faces. If different tiles get paired, raise strictness; if identical tiles don't pair, lower it.<br>
     How it works: it finds the bright, low-color tile faces, keeps only faces that are fully visible (a tile with another tile on top shows only part of its face), compares each tile's picture against the others, and groups identical ones. A tile counts as "free" when no visible tile touches its left or its right side. That's a best guess from one camera angle, so double-check before tapping. Flower and season tiles match within their set in most games, but they look different, so this tool won't pair them.</p>
@@ -221,7 +221,7 @@ function plan(res){
 /* ---------------- drawing ---------------- */
 function showPlan(res,pl){const el=$('plan');if(res.reason){el.style.display='none';return;}el.style.display='';el.className='plan';
   const trayTxt=TRAY?`Tray ${pl.trayN}/4`:'Tray not marked (assuming empty)';const u=`Undos left: ${UNDOS}`;
-  if(!TRAY){el.innerHTML=`<div class="big">${pl.best?moveText(pl.best):'No safe move found'}</div><small>${trayTxt} · ${u}. Tap <b>▭ Mark tray</b> and drag a box over the 4 slots so I can read them.</small>`;return;}
+  if(!TRAY){const n=pl.legal.length-1;el.innerHTML=pl.best?`<div class="big">${moveText(pl.best)}</div><small>${n>0?n+' other pair'+(n>1?'s':'')+' also available · tap 👁 to see all':'This is the only free pair I can see'}</small>`:`<div class="big">No free pair visible</div><small>Hold the camera steady with the whole board in view, or try the game's hint button.</small>`;return;}
   if(pl.trayN>=3&&(!pl.best||pl.best.kind!=='finish')){el.className='plan danger';el.innerHTML=`<div class="big">Careful: ${pl.trayN} tiles in the tray</div>Any tap that doesn't match a tray tile ends your turn.${UNDOS?` No matching tile looks free, so use an <b>undo</b> (${UNDOS} left) to take back a stored tile.`:' No matching tile looks free and you have no undos left.'}<small>${trayTxt} · ${u}</small>`;return;}
   if(!pl.best){el.className='plan danger';el.innerHTML=`<div class="big">No safe move visible</div>${UNDOS?`Undo your last move (${UNDOS} left) and try a different pair, or double-check the board: the camera may have missed a free tile.`:'Check the board yourself: the camera may have missed a free tile.'}<small>${trayTxt} · ${u}</small>`;return;}
   const nAlt=pl.legal.length-1;
@@ -298,6 +298,7 @@ async function startCam(){
   if(stream){stopCam();return;}
   try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}},audio:false});}
   catch(e){$('status').innerHTML=`<span class="pill">Camera unavailable here (${e.name||e.message}). If you're viewing this inside the chat, open the downloaded file directly in Chrome or Safari, or use a screenshot instead.</span>`;return;}
+  if(TRAY&&TRAY.demo)TRAY=null;
   video.srcObject=stream;await video.play();mode='cam';frozen=false;$('hint').style.display='none';$('camBtn').classList.add('on');$('camBtn').textContent='■ Stop camera';$('freezeBtn').disabled=false;$('freezeBtn').textContent='⏸ Freeze';
   loop();
 }
@@ -307,7 +308,7 @@ let procMs=250;
 function loop(){if(mode!=='cam')return;requestAnimationFrame(loop);if(frozen)return;const now=performance.now();if(now-lastT<Math.max(250,procMs*1.6))return;lastT=now;if(video.videoWidth){const t0=performance.now();process(video,video.videoWidth,video.videoHeight);procMs=procMs*0.7+(performance.now()-t0)*0.3;}}
 $('camBtn').onclick=startCam;
 $('freezeBtn').onclick=()=>{frozen=!frozen;$('freezeBtn').textContent=frozen?'▶ Resume':'⏸ Freeze';$('freezeBtn').classList.toggle('on',frozen);};
-$('fileIn').onchange=e=>{const f=e.target.files[0];if(!f)return;stopCam();const im=new Image();im.onload=()=>{mode='img';$('hint').style.display='none';selected=-1;process(im,im.naturalWidth,im.naturalHeight);};im.src=URL.createObjectURL(f);};
+$('fileIn').onchange=e=>{const f=e.target.files[0];if(!f)return;stopCam();if(TRAY&&TRAY.demo)TRAY=null;const im=new Image();im.onload=()=>{mode='img';$('hint').style.display='none';selected=-1;process(im,im.naturalWidth,im.naturalHeight);};im.src=URL.createObjectURL(f);};
 $('demoBtn').onclick=()=>{stopCam();const c=makeDemo();if(!TRAY||TRAY.demo){TRAY={...window.__demoTrayRect,demo:true};}mode='img';$('hint').style.display='none';selected=-1;process(c,c.width,c.height);};
 const frac=e=>{const r=ov.getBoundingClientRect();return{x:(e.clientX-r.left)/r.width,y:(e.clientY-r.top)/r.height};};
 $('trayBtn').onclick=()=>{if(!last){$('status').innerHTML='<span class="pill">Load a screenshot or start the camera first.</span>';return;}marking=!marking;$('trayBtn').classList.toggle('on',marking);$('trayBtn').textContent=marking?'Drag over the 4 slots…':'▭ Mark tray';if(marking&&mode==='cam'&&!frozen)$('freezeBtn').click();};
@@ -317,6 +318,7 @@ ov.addEventListener('pointerup',e=>{if(!marking||!dragA)return;const b=frac(e);c
   if(r.x1-r.x0>0.03&&r.y1-r.y0>0.02){TRAY=r;try{localStorage.setItem('mj-tray',JSON.stringify(TRAY));}catch(err){}}marking=false;$('trayBtn').classList.remove('on');$('trayBtn').textContent='▭ Mark tray';reprocess();
   if(mode==='cam'&&frozen)$('freezeBtn').click();});
 $('allBtn').onclick=()=>{SHOWALL=!SHOWALL;$('allBtn').classList.toggle('on',SHOWALL);$('allBtn').textContent=SHOWALL?'🎯 Next move only':'👁 Show all pairs';if(last)draw(last.res,last.W,last.H);};
+$('trayClear').onclick=()=>{TRAY=null;try{localStorage.removeItem('mj-tray');}catch(e){}reprocess();};
 $('uMinus').onclick=()=>{UNDOS=Math.max(0,UNDOS-1);$('uVal').textContent=UNDOS;if(last)draw(last.res,last.W,last.H);};
 $('uPlus').onclick=()=>{UNDOS=Math.min(9,UNDOS+1);$('uVal').textContent=UNDOS;if(last)draw(last.res,last.W,last.H);};
 ov.addEventListener('click',e=>{if(!last||marking)return;const r=ov.getBoundingClientRect();const x=(e.clientX-r.left)*last.W/r.width,y=(e.clientY-r.top)*last.H/r.height;
@@ -325,6 +327,8 @@ ov.addEventListener('click',e=>{if(!last||marking)return;const r=ov.getBoundingC
 const bind=(id,key,fmt,scale=1)=>{const el=$(id);el.oninput=()=>{P[key]=el.type==='checkbox'?el.checked:(+el.value)*scale;const out=$('v'+id.slice(1));if(out)out.textContent=fmt(P[key]);reprocess();};};
 bind('tBright','bright',v=>v===0?'auto':(v>0?'+':'')+v);bind('tSat','sat',v=>v);bind('tMatch','match',v=>v.toFixed(2),0.01);bind('tMask','mask',()=>'');
 
+// start the camera straight away when the page opens (falls back to the buttons if the browser says no)
+window.addEventListener('load',()=>{if(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia&&!/claude\.ai|claudeusercontent/.test(location.host))setTimeout(()=>{if(!stream&&!last)startCam();},300);});
 /* ---------------- demo board (synthetic, with camera-like blur/noise) ---------------- */
 function drawFace(g,type,x,y,w,h){
   const [suit,v]=type;const cx=x+w/2,cy=y+h/2;
